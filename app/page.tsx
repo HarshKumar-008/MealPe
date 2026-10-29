@@ -1,5 +1,5 @@
 "use client";
-
+import { supabase } from "@/lib/supabase";
 import { useState } from "react";
 import {
   ArrowRight,
@@ -18,13 +18,58 @@ export default function Home() {
   const [rememberMe, setRememberMe] = useState(true);
   const [message, setMessage] = useState("");
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  event.preventDefault();
+  setMessage("");
 
-    setMessage(
-      "Your form is ready! Supabase authentication will be connected next."
-    );
+  const formData = new FormData(event.currentTarget);
+
+  const email = String(formData.get("email") ?? "").trim();
+  const password = String(formData.get("password") ?? "");
+
+  try {
+    if (isSignup) {
+      const name = String(formData.get("name") ?? "").trim();
+
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: name,
+          },
+        },
+      });
+
+      if (error) {
+        setMessage(error.message);
+        return;
+      }
+
+      if (data.session) {
+        setMessage("Account created successfully! You are now signed in.");
+      } else {
+        setMessage(
+          "Account created. Check your email for a verification link if required."
+        );
+      }
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        setMessage(error.message);
+        return;
+      }
+
+      setMessage("Login successful!");
+    }
+  } catch {
+    setMessage("Something went wrong. Please try again.");
   }
+}
 
   function switchMode() {
     setIsSignup(!isSignup);
