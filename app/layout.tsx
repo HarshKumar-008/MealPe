@@ -17,7 +17,12 @@ export const metadata: Metadata = {
   description:
     "Manage your weekly meals, meal opt-outs, and mess billing with MealPe.",
 };
-export default function RootLayout({ children }: LayoutProps<"/">) {
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html
       lang="en"

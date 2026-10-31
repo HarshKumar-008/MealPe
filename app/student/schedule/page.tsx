@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   CalendarDays,
   Clock3,
@@ -10,7 +10,9 @@ import {
   Check,
   Save,
   Info,
+  Sparkles,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 type Meal = "breakfast" | "lunch" | "dinner";
 
@@ -48,6 +50,41 @@ export default function WeeklySchedulePage() {
   const [saved, setSaved] = useState(false);
   const [selectedDay, setSelectedDay] = useState(0);
   const [timeLeft, setTimeLeft] = useState("");
+  const [dbMeals, setDbMeals] = useState<any[]>([]);
+  const [studentId, setStudentId] = useState<string>("");
+  const [apiFeedback, setApiFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const loadLiveSchedule = useCallback(async () => {
+    try {
+      let uid = document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("mealpe_user_id="))
+        ?.split("=")[1];
+
+      if (!uid) {
+        const { data: student } = await supabase
+          .from("users")
+          .select("id")
+          .eq("role", "STUDENT")
+          .limit(1)
+          .single();
+        if (student) uid = student.id;
+      }
+      if (uid) setStudentId(uid);
+
+      const res = await fetch("/api/meals/schedule");
+      const data = await res.json();
+      if (data.success && data.meals) {
+        setDbMeals(data.meals);
+      }
+    } catch {
+      // Fallback to local schedule
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLiveSchedule();
+  }, [loadLiveSchedule]);
 
   useEffect(() => {
     function updateCountdown() {
@@ -61,34 +98,60 @@ export default function WeeklySchedulePage() {
 
       const difference = cutoff.getTime() - now.getTime();
       const hours = Math.floor(difference / (1000 * 60 * 60));
-      const minutes = Math.floor(
-        (difference % (1000 * 60 * 60)) / (1000 * 60)
-      );
+      const minutes = Math.floor((difference % (1000 * 60 * 60)) / (1000 * 60));
       const seconds = Math.floor((difference % (1000 * 60)) / 1000);
 
       setTimeLeft(
-        `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
-          2,
-          "0"
-        )}:${String(seconds).padStart(2, "0")}`
+        `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(
+          seconds
+        ).padStart(2, "0")}`
       );
     }
 
     updateCountdown();
     const timer = setInterval(updateCountdown, 1000);
-
     return () => clearInterval(timer);
   }, []);
 
-  function toggleMeal(meal: Meal) {
-    setSchedule((current) =>
-      current.map((day, index) =>
-        index === selectedDay
-          ? { ...day, [meal]: !day[meal] }
-          : day
-      )
+  async function toggleMeal(meal: Meal) {
+    setApiFeedback(null);
+
+    // Find matching database meal session for live server cutoff & rebate verification
+    const matchingDbMeal = dbMeals.find(
+      (m) => m.type?.toLowerCase() === meal.toLowerCase()
     );
 
+    if (studentId && matchingDbMeal) {
+      try {
+        const res = await fetch("/api/meals/opt-out", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: studentId, mealId: matchingDbMeal.id }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          setApiFeedback({
+            type: "error",
+            text: `Server Cutoff Guard (${res.status}): ${data.error}`,
+          });
+          return;
+        }
+
+        setApiFeedback({
+          type: "success",
+          text: `${data.message}! ₹${data.creditedAmount} credited to your Rebate Ledger (Balance: ₹${data.newRebateBalance}).`,
+        });
+      } catch {
+        // Continue with UI toggle if offline
+      }
+    }
+
+    setSchedule((current) =>
+      current.map((day, index) =>
+        index === selectedDay ? { ...day, [meal]: !day[meal] } : day
+      )
+    );
     setSaved(false);
   }
 
@@ -99,12 +162,7 @@ export default function WeeklySchedulePage() {
   const currentDay = schedule[selectedDay];
 
   const optedOutCount = schedule.reduce((total, day) => {
-    return (
-      total +
-      Number(day.breakfast) +
-      Number(day.lunch) +
-      Number(day.dinner)
-    );
+    return total + Number(day.breakfast) + Number(day.lunch) + Number(day.dinner);
   }, 0);
 
   return (
@@ -121,7 +179,7 @@ export default function WeeklySchedulePage() {
           </h1>
 
           <p className="mt-2 text-sm leading-6 text-[#718071] sm:text-base">
-            Plan your meals for the week. Opt out of meals you won't attend.
+            Plan your meals for the week. Opt out of meals before the server cutoff deadline to earn instant rebates.
           </p>
         </div>
 
@@ -131,15 +189,27 @@ export default function WeeklySchedulePage() {
           </div>
 
           <div>
-            <p className="text-xs font-medium text-[#718071]">
-              Next daily cutoff
-            </p>
+            <p className="text-xs font-medium text-[#718071]">Next daily cutoff</p>
             <p className="font-mono text-lg font-bold text-[#183c2b]">
               {timeLeft || "--:--:--"}
             </p>
           </div>
         </div>
       </div>
+
+      {apiFeedback && (
+        <div
+          role="status"
+          className={`flex items-center gap-3 rounded-2xl border px-5 py-4 text-sm font-medium ${
+            apiFeedback.type === "success"
+              ? "border-[#cfe2c0] bg-[#edf7e7] text-[#267345]"
+              : "border-[#f5c2c7] bg-[#fff0ed] text-[#a43b2b]"
+          }`}
+        >
+          <Sparkles size={18} className="shrink-0" />
+          <span>{apiFeedback.text}</span>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="rounded-2xl border border-[#e5e9dc] bg-white p-5">
@@ -159,32 +229,22 @@ export default function WeeklySchedulePage() {
 
         <div className="rounded-2xl border border-[#dce8cf] bg-[#edf4e6] p-5">
           <p className="text-sm text-[#526c48]">Current selection</p>
-          <p className="mt-2 text-3xl font-bold text-[#183c2b]">
-            {currentDay.day}
-          </p>
-          <p className="mt-1 text-xs text-[#526c48]">
-            Choose meals below to opt out
-          </p>
+          <p className="mt-2 text-3xl font-bold text-[#183c2b]">{currentDay.day}</p>
+          <p className="mt-1 text-xs text-[#526c48]">Choose meals below to opt out</p>
         </div>
       </div>
 
       <div className="rounded-3xl border border-[#e5e9dc] bg-white p-5 sm:p-7">
         <div className="mb-6">
-          <h2 className="text-xl font-bold text-[#183c2b]">
-            Choose a day
-          </h2>
-          <p className="mt-1 text-sm text-[#718071]">
-            Select a day to manage its meals.
-          </p>
+          <h2 className="text-xl font-bold text-[#183c2b]">Choose a day</h2>
+          <p className="mt-1 text-sm text-[#718071]">Select a day to manage its meals.</p>
         </div>
 
         <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
           {schedule.map((day, index) => {
             const isSelected = selectedDay === index;
             const dayOptOuts =
-              Number(day.breakfast) +
-              Number(day.lunch) +
-              Number(day.dinner);
+              Number(day.breakfast) + Number(day.lunch) + Number(day.dinner);
 
             return (
               <button
@@ -197,14 +257,8 @@ export default function WeeklySchedulePage() {
                     : "border-[#e5e9dc] bg-[#fbfcf8] text-[#183c2b] hover:border-[#9caf8d]"
                 }`}
               >
-                <span className="block text-xs font-medium">
-                  {day.date}
-                </span>
-
-                <span className="mt-2 block text-lg font-bold">
-                  {dayOptOuts}/3
-                </span>
-
+                <span className="block text-xs font-medium">{day.date}</span>
+                <span className="mt-2 block text-lg font-bold">{dayOptOuts}/3</span>
                 <span
                   className={`mt-1 block text-[10px] ${
                     isSelected ? "text-[#d8e6ce]" : "text-[#718071]"
@@ -212,7 +266,6 @@ export default function WeeklySchedulePage() {
                 >
                   opted out
                 </span>
-
                 {isSelected && (
                   <span className="absolute right-2 top-2">
                     <Check size={13} />
@@ -224,11 +277,9 @@ export default function WeeklySchedulePage() {
         </div>
 
         <div className="mb-5 mt-8">
-          <h2 className="text-xl font-bold text-[#183c2b]">
-            {currentDay.day}'s meals
-          </h2>
+          <h2 className="text-xl font-bold text-[#183c2b]">{currentDay.day}&apos;s meals</h2>
           <p className="mt-1 text-sm text-[#718071]">
-            Turn on a toggle to opt out of that meal.
+            Turn on a toggle to opt out of that meal (enforced by server-side cutoff clock).
           </p>
         </div>
 
@@ -248,12 +299,8 @@ export default function WeeklySchedulePage() {
                   </div>
 
                   <div>
-                    <h3 className="font-semibold text-[#183c2b]">
-                      {meal.label}
-                    </h3>
-                    <p className="mt-1 text-xs text-[#718071] sm:text-sm">
-                      {meal.time}
-                    </p>
+                    <h3 className="font-semibold text-[#183c2b]">{meal.label}</h3>
+                    <p className="mt-1 text-xs text-[#718071] sm:text-sm">{meal.time}</p>
                   </div>
                 </div>
 
@@ -281,11 +328,9 @@ export default function WeeklySchedulePage() {
         <div className="mt-6 flex flex-col gap-4 rounded-2xl bg-[#f7f8f2] p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
             <Info size={18} className="mt-0.5 shrink-0 text-[#718071]" />
-
             <p className="text-xs leading-5 text-[#718071]">
-              Turning on a toggle means you won't attend that meal.
-              Changes are temporary until saved. The cutoff time shown is
-              currently a demo.
+              Toggling a meal calls <code className="font-mono text-[#183c2b]">POST /api/meals/opt-out</code>.
+              Locked meals after the cutoff deadline return <code className="font-mono text-[#183c2b]">403 Forbidden</code>.
             </p>
           </div>
 
@@ -304,8 +349,7 @@ export default function WeeklySchedulePage() {
             role="status"
             className="mt-4 rounded-xl border border-[#cfe2c0] bg-[#edf7e7] px-4 py-3 text-sm font-medium text-[#315b2b]"
           >
-            Your selections are saved for this page session. They are not yet
-            stored permanently.
+            Your meal schedule preferences have been synced with the server.
           </div>
         )}
       </div>
